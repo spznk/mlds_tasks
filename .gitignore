@@ -4,3 +4,8 @@
 .DS_Store
 */.DS_Store
 md2/.DS_Store
+**/.DS_Store
+md2/*/.DS_Store
+**/__pycache__
+**/.vscode
+*/*/.vscode
