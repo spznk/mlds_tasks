@@ -13,13 +13,14 @@ class PreprocessedData:
     y_train: pd.Series
     X_val: pd.DataFrame
     y_val: pd.Series
+    input_cols: list[str]
     numeric_cols: list[str]
     categorical_cols: list[str]
     scaler: MinMaxScaler | None
     ohe: OneHotEncoder | None
 
 
-def split_data(raw_df) -> tuple[pd.DataFrame, pd.DataFrame]:
+def split_data(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Split the raw dataset into training and validation subsets.
 
@@ -45,7 +46,7 @@ def split_data(raw_df) -> tuple[pd.DataFrame, pd.DataFrame]:
     return train_df, val_df
 
 
-def identify_features(raw_df) -> tuple[pd.Index, str]:
+def identify_features(raw_df: pd.DataFrame) -> tuple[pd.Index, str]:
     """
     Identify input features and target column names.
 
@@ -60,13 +61,16 @@ def identify_features(raw_df) -> tuple[pd.Index, str]:
             - input_cols: Names of columns used as model inputs.
             - target_col: Name of the target variable.
     """
-    input_cols = raw_df.columns.drop(['id', 'CustomerId', 'Surname', 'Exited'])
-    target_col = "Exited"
+    input_cols = raw_df.columns.drop(['id', 'CustomerId', 'Surname'])
+    if 'Exited' in input_cols:
+        input_cols = input_cols.drop('Exited')
+
+    target_col = 'Exited'
 
     return input_cols, target_col
 
 
-def get_data_subsets(train_df, val_df, input_cols, target_col) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+def get_data_subsets(train_df: pd.DataFrame, val_df: pd.DataFrame, input_cols: list, target_col: str) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
     """
     Separate datasets into input features (X) and target values (y).
 
@@ -94,7 +98,7 @@ def get_data_subsets(train_df, val_df, input_cols, target_col) -> tuple[pd.DataF
     return X_train, y_train, X_val, y_val
 
 
-def get_num_and_cat_cols(X_train) -> tuple[list, list]:
+def get_num_and_cat_cols(X_train: pd.DataFrame) -> tuple[list, list]:
     """
     Identify numerical and categorical columns in the dataset.
 
@@ -115,7 +119,39 @@ def get_num_and_cat_cols(X_train) -> tuple[list, list]:
     return numeric_cols, categorical_cols
 
 
-def transform_columns(X_train, X_val, numeric_cols, categorical_cols) -> tuple[pd.DataFrame, pd.DataFrame, MinMaxScaler or None, OneHotEncoder or None]:
+def transform_and_add_categories(fitted_encoder: OneHotEncoder, X: pd.DataFrame, categorical_cols: list) -> pd.DataFrame:
+    """
+    Transform categorical features using a fitted OneHotEncoder and add them to the dataset.
+
+    The function applies the encoder to the specified categorical columns,
+    creating new one-hot encoded columns. The original categorical columns
+    are dropped from the dataset.
+
+    Args:
+        fitted_encoder (OneHotEncoder): Pre-fitted OneHotEncoder instance.
+        X (pd.DataFrame): Dataset containing categorical features.
+        categorical_cols (list): Names of categorical columns to transform.
+
+    Returns:
+        pd.DataFrame: Dataset with one-hot encoded features added and original
+                      categorical columns removed.
+    """
+    encoded_cols = fitted_encoder.get_feature_names_out(categorical_cols).tolist()
+
+    encoded_data = pd.DataFrame(
+        fitted_encoder.transform(X[categorical_cols]),
+        columns=encoded_cols,
+        index=X.index
+    )
+
+    X_transformed = pd.concat(
+        [X.drop(columns=categorical_cols), encoded_data],
+        axis=1
+    )
+
+    return X_transformed
+
+def transform_columns(X_train: pd.DataFrame, X_val: pd.DataFrame, numeric_cols: list, categorical_cols: list) -> tuple[pd.DataFrame, pd.DataFrame, MinMaxScaler | None, OneHotEncoder | None]:
     """
     Apply preprocessing transformations to numerical and categorical features.
 
@@ -155,34 +191,14 @@ def transform_columns(X_train, X_val, numeric_cols, categorical_cols) -> tuple[p
 
         ohe.fit(X_train[categorical_cols])
 
-        encoded_cols = ohe.get_feature_names_out(categorical_cols).tolist()
+        X_train = transform_and_add_categories(ohe, X_train, categorical_cols)
 
-        encoded_train = pd.DataFrame(
-            ohe.transform(X_train[categorical_cols]),
-            columns=encoded_cols,
-            index=X_train.index
-        )
-
-        encoded_val = pd.DataFrame(
-            ohe.transform(X_val[categorical_cols]),
-            columns=encoded_cols,
-            index=X_val.index
-        )
-
-        X_train = pd.concat(
-            [X_train.drop(columns=categorical_cols), encoded_train],
-            axis=1
-        )
-
-        X_val = pd.concat(
-            [X_val.drop(columns=categorical_cols), encoded_val],
-            axis=1
-        )
+        X_val = transform_and_add_categories(ohe, X_val, categorical_cols)
 
     return X_train, X_val, scaler, ohe
 
 
-def preprocess_data(raw_df) -> PreprocessedData:
+def preprocess_data(raw_df: pd.DataFrame) -> PreprocessedData:
     """
     Execute the complete preprocessing pipeline.
 
@@ -225,8 +241,31 @@ def preprocess_data(raw_df) -> PreprocessedData:
         y_train=y_train,
         X_val=X_val,
         y_val=y_val,
+        input_cols=input_cols.tolist(),
         numeric_cols=numeric_cols,
         categorical_cols=categorical_cols,
         scaler=scaler,
         ohe=ohe
     )
+
+def preprocess_new_data(test_df: pd.DataFrame, data: PreprocessedData) -> pd.DataFrame:
+    """
+    Preprocess new data using the same transformations as the training data.
+
+    This function applies the fitted scaler and encoder from the training data
+    to ensure consistency in feature representation.
+
+    Args:
+        test_df (pd.DataFrame): New dataset to preprocess.
+        data (PreprocessedData): Preprocessed training data containing fitted transformers.
+
+    Returns:
+        pd.DataFrame: Preprocessed new data.
+    """
+    X_test = test_df[data.input_cols].copy()
+
+    X_test[data.numeric_cols] = data.scaler.transform(X_test[data.numeric_cols])
+
+    X_test = transform_and_add_categories(data.ohe, X_test, data.categorical_cols)
+
+    return X_test
